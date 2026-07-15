@@ -1,0 +1,26 @@
+# Python
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.log
+.cache/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Node / frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

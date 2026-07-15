@@ -1,0 +1,141 @@
+//@version=5
+// =============================================================================
+//  NSE Intraday — Opening Range Breakout + VWAP + Trend + Volume
+//  A transparent, backtestable intraday strategy for Indian stocks.
+//
+//  Setups combined (all proven, widely-documented):
+//    - Opening Range Breakout (ORB): trade breaks of the first N-minute range
+//    - VWAP filter: longs only above VWAP, shorts only below
+//    - EMA trend filter: trade with the intraday trend
+//    - Relative-volume filter: require a volume spike to confirm the breakout
+//    - Optional RSI filter
+//    - ATR-based stop-loss & target (defined risk:reward)
+//    - Automatic end-of-day square-off (intraday rule)
+//
+//  HOW TO USE
+//    1. TradingView -> Pine Editor -> paste this -> "Add to chart".
+//    2. Use it on an NSE stock on a 5-min chart (works on 3/15-min too).
+//    3. Open the "Strategy Tester" tab to see backtest results.
+//    4. Tune inputs in the settings gear. VALIDATE before trusting it.
+//
+//  DISCLAIMER: Educational. Not investment advice. Past backtest results do
+//  not guarantee future returns. Always use stop-losses.
+// =============================================================================
+
+strategy(
+     title              = "NSE Intraday ORB+VWAP",
+     overlay            = true,
+     pyramiding         = 0,
+     initial_capital    = 100000,
+     default_qty_type   = strategy.percent_of_equity,
+     default_qty_value  = 100,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.03,          // ~brokerage+charges per side (tune)
+     slippage           = 2,
+     process_orders_on_close = true,
+     calc_on_every_tick = false)
+
+// ------------------------------------------------------------------ Inputs
+grpOR   = "Opening Range"
+orMin   = input.int(15, "Opening range (minutes)", minval=5, maxval=60, group=grpOR)
+
+grpFilt = "Filters"
+useVWAP = input.bool(true,  "VWAP filter (long>VWAP, short<VWAP)", group=grpFilt)
+useEMA  = input.bool(true,  "EMA trend filter", group=grpFilt)
+emaLen  = input.int(20,     "EMA length", minval=5, group=grpFilt)
+useRVOL = input.bool(true,  "Relative-volume filter", group=grpFilt)
+rvolLen = input.int(20,     "Volume average length", minval=5, group=grpFilt)
+rvolMlt = input.float(1.5,  "Min relative volume (x)", step=0.1, group=grpFilt)
+useRSI  = input.bool(false, "RSI filter (long>50 / short<50)", group=grpFilt)
+
+grpRisk = "Risk"
+atrLen  = input.int(14,   "ATR length", minval=1, group=grpRisk)
+slMult  = input.float(1.5,"Stop-loss = ATR x", step=0.1, group=grpRisk)
+tpMult  = input.float(3.0,"Target   = ATR x", step=0.1, group=grpRisk)   // 1:2 R:R
+oneADay = input.bool(true,"Only one trade per day", group=grpRisk)
+allowShort = input.bool(true, "Allow short trades", group=grpRisk)
+
+grpTime = "Session (Asia/Kolkata)"
+entrySess = input.session("0915-1500", "Entry window (no new entries after)", group=grpTime)
+sqoffSess = input.session("1515-1530", "Square-off window", group=grpTime)
+
+tz = "Asia/Kolkata"
+
+// ---------------------------------------------------------- Core indicators
+vwapVal = ta.vwap(hlc3)
+emaVal  = ta.ema(close, emaLen)
+avgVol  = ta.sma(volume, rvolLen)
+rvol    = avgVol > 0 ? volume / avgVol : 1.0
+rsiVal  = ta.rsi(close, 14)
+atrVal  = ta.atr(atrLen)
+
+// --------------------------------------------------- Opening range tracking
+// Minutes since the 09:15 NSE open for the current bar's date.
+sessOpen = timestamp(tz, year, month, dayofmonth, 9, 15)
+minsSinceOpen = (time - sessOpen) / 60000.0
+inOR    = minsSinceOpen >= 0 and minsSinceOpen < orMin
+afterOR = minsSinceOpen >= orMin
+
+var float orHigh = na
+var float orLow  = na
+var bool  tradedToday = false
+
+newDay = ta.change(time("1D")) != 0
+if newDay
+    orHigh := na
+    orLow  := na
+    tradedToday := false
+
+if inOR
+    orHigh := na(orHigh) ? high : math.max(orHigh, high)
+    orLow  := na(orLow)  ? low  : math.min(orLow,  low)
+
+// --------------------------------------------------------- Window detection
+inEntryWindow = not na(time(timeframe.period, entrySess, tz))
+inSquareOff   = not na(time(timeframe.period, sqoffSess, tz))
+
+// ------------------------------------------------------------- Entry logic
+longFilter  = (not useVWAP or close > vwapVal) and (not useEMA or close > emaVal) and (not useRVOL or rvol >= rvolMlt) and (not useRSI or rsiVal > 50)
+shortFilter = (not useVWAP or close < vwapVal) and (not useEMA or close < emaVal) and (not useRVOL or rvol >= rvolMlt) and (not useRSI or rsiVal < 50)
+
+breakoutUp   = not na(orHigh) and close > orHigh
+breakoutDown = not na(orLow)  and close < orLow
+
+canEnter = afterOR and inEntryWindow and not inSquareOff and strategy.position_size == 0 and (not oneADay or not tradedToday)
+
+if canEnter
+    if breakoutUp and longFilter
+        strategy.entry("Long", strategy.long)
+        tradedToday := true
+    else if allowShort and breakoutDown and shortFilter
+        strategy.entry("Short", strategy.short)
+        tradedToday := true
+
+// ---------------------------------------------------- ATR stop-loss / target
+avg = strategy.position_avg_price
+if strategy.position_size > 0
+    strategy.exit("Long TP/SL", from_entry="Long", stop=avg - atrVal * slMult, limit=avg + atrVal * tpMult)
+if strategy.position_size < 0
+    strategy.exit("Short TP/SL", from_entry="Short", stop=avg + atrVal * slMult, limit=avg - atrVal * tpMult)
+
+// -------------------------------------------------------- EOD square-off
+if inSquareOff and strategy.position_size != 0
+    strategy.close_all(comment="EOD square-off")
+
+// ---------------------------------------------------------------- Plots
+plot(useVWAP ? vwapVal : na, "VWAP", color=color.orange, linewidth=2)
+plot(useEMA  ? emaVal  : na, "EMA",  color=color.new(color.blue, 0))
+plot(orHigh, "OR High", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=2)
+plot(orLow,  "OR Low",  color=color.new(color.red, 0),   style=plot.style_linebr, linewidth=2)
+
+// Previous day high/low (extra intraday levels many traders watch).
+pdh = request.security(syminfo.tickerid, "D", high[1], lookahead=barmerge.lookahead_on)
+pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead=barmerge.lookahead_on)
+plot(pdh, "Prev Day High", color=color.new(color.gray, 40), style=plot.style_circles)
+plot(pdl, "Prev Day Low",  color=color.new(color.gray, 40), style=plot.style_circles)
+
+bgcolor(inOR ? color.new(color.blue, 92) : na, title="Opening range period")
+
+// ---------------------------------------------------------------- Alerts
+alertcondition(breakoutUp   and longFilter,  "Long breakout",  "ORB long signal")
+alertcondition(breakoutDown and shortFilter, "Short breakout", "ORB short signal")
