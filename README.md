@@ -48,6 +48,29 @@ npm run build      # outputs static files to frontend/dist
 Serve `frontend/dist` behind any static host / reverse proxy, and run Flask
 with a WSGI server (e.g. `waitress-serve --port=5000 backend.app:app`).
 
+## Deploying to Vercel
+
+The repo is Vercel-ready via `vercel.json`:
+- **Frontend** — Vercel builds `frontend/` (Vite) into static files.
+- **Backend** — `api/index.py` re-exports the Flask app as a Python
+  serverless function; all `/api/*` requests route to it.
+
+Steps:
+1. Import the GitHub repo in Vercel (no framework preset needed — `vercel.json`
+   handles the build).
+2. In Vercel → Project → Settings → **Environment Variables**, set at least
+   `DATA_PROVIDER=mock` (or `angelone` plus the four `ANGELONE_*` values).
+3. Deploy. The site serves the React app; the browser calls `/api/*` on the
+   same origin.
+
+**Vercel limitations to know:**
+- Serverless functions are stateless and have execution-time limits, and
+  **WebSocket streaming won't work** — so live Angel One tick streaming can't
+  run here. Historical/REST calls are fine.
+- For a always-on Flask server (needed for live streaming or scheduled scans),
+  **Render** or **Railway** are a better fit: run `python -m backend.app`
+  (via gunicorn/waitress) and serve `frontend/dist` statically.
+
 ## API endpoints
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -77,7 +100,9 @@ with a WSGI server (e.g. `waitress-serve --port=5000 backend.app:app`).
 ```
 config.py                  # settings + credentials (from .env)
 smoke_test.py              # end-to-end sanity check on mock data
-app.py                     # legacy Streamlit UI (optional; not required)
+streamlit_app.py           # legacy Streamlit UI (optional; not required)
+vercel.json                # Vercel deploy config (Python API + static React)
+api/index.py               # Vercel serverless entry (re-exports Flask app)
 
 backend/
   app.py                   # Flask REST API (reuses src/ engine)

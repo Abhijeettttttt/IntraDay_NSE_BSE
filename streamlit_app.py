@@ -1,6 +1,6 @@
-"""Intraday Signals — Streamlit dashboard.
+"""Intraday Signals — Streamlit dashboard (legacy/optional UI).
 
-Run:  streamlit run app.py
+Run:  streamlit run streamlit_app.py
 
 Works out of the box on synthetic (mock) data. Set DATA_PROVIDER=angelone
 with credentials in .env to use live Angel One SmartAPI data.
